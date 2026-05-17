@@ -386,3 +386,164 @@ def db_init() -> None:
     from .store import db as _db
     _db.init_schema()
     click.echo(f"✓ schema ready at {config.db_path()}")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# config
+# ─────────────────────────────────────────────────────────────────────
+
+
+@main.group(name="config")
+def config_cmd() -> None:
+    """User configuration (~/.skillforge/config.toml)."""
+
+
+@config_cmd.command(name="get")
+@click.argument("key")
+def config_get(key: str) -> None:
+    from . import userconfig
+    val = userconfig.get(key)
+    click.echo(val if val is not None else "(unset)")
+
+
+@config_cmd.command(name="set")
+@click.argument("key")
+@click.argument("value")
+def config_set(key: str, value: str) -> None:
+    from . import userconfig
+    # Coerce simple booleans / ints so users don't have to quote everything.
+    coerced: object = value
+    if value.lower() in ("true", "false"):
+        coerced = value.lower() == "true"
+    else:
+        try:
+            coerced = int(value)
+        except ValueError:
+            pass
+    userconfig.set_(key, coerced)
+    click.echo(f"✓ {key} = {coerced!r}")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# evolve
+# ─────────────────────────────────────────────────────────────────────
+
+
+@main.group(invoke_without_command=True)
+@click.option("--list", "list_only", is_flag=True, help="Just list pending items (JSON to stdout).")
+@click.option("--render", "render_id", help="Print the evolution prompt for one queue_id and exit.")
+@click.option("--apply", "apply_id", help="Apply parsed result to a queue_id; --content gives the file.")
+@click.option("--content", "content_path", help="Path to a file with the LLM output to parse.")
+@click.option("--max", "max_items", type=int, help="Cap how many items to process this run.")
+@click.pass_context
+def evolve(ctx: click.Context, list_only: bool, render_id: str | None,
+           apply_id: str | None, content_path: str | None,
+           max_items: int | None) -> None:
+    """Drain the evolution queue (or do single-item ops for sf-evolve skill)."""
+    if ctx.invoked_subcommand is not None:
+        return
+
+    from .evolver import queue as q, worker, parser as _parser
+    from .evolver.apply import apply_fix, apply_derived, apply_captured
+    from .analyzer import render_evolution_prompt as _render
+    import json as _json
+
+    if list_only:
+        click.echo(_json.dumps(q.list_pending(), default=str, indent=2))
+        return
+
+    if render_id:
+        for item in q.list_pending():
+            if item["queue_id"] == render_id:
+                c = item["candidate"]
+                click.echo(_render(
+                    kind=item["kind"],
+                    skill_id=c.get("skill_id"),
+                    metrics=c.get("metrics", {}),
+                    trigger_task_id=c.get("trigger_task_id"),
+                ))
+                return
+        raise click.ClickException(f"queue_id {render_id} not found")
+
+    if apply_id:
+        if not content_path:
+            raise click.ClickException("--apply requires --content <path>")
+        text = Path(content_path).read_text(encoding="utf-8")
+        decision = _parser.parse_evolution_output(text)
+
+        target = None
+        for item in q.list_pending():
+            if item["queue_id"] == apply_id:
+                target = item
+                break
+        if target is None:
+            raise click.ClickException(f"queue_id {apply_id} not found in pending")
+
+        if not decision.confirmed:
+            q.mark_done(apply_id, error=f"rejected: {decision.reject_reason}")
+            click.echo(f"= rejected: {decision.reject_reason}")
+            return
+        if not decision.ok:
+            q.mark_done(apply_id, error=f"parse: {decision.failure_reason}")
+            click.echo(f"✗ malformed output: {decision.failure_reason}")
+            return
+
+        kind = target["kind"]
+        sid = target["candidate"].get("skill_id")
+        try:
+            if kind == "fix":
+                new_id = apply_fix(target_skill_id=sid or "", decision=decision)
+            elif kind == "derived":
+                new_id = apply_derived(parent_skill_id=sid or "", decision=decision)
+            else:
+                new_id = apply_captured(decision=decision)
+        except Exception as exc:  # noqa: BLE001
+            q.mark_done(apply_id, error=f"apply: {exc}")
+            raise click.ClickException(f"apply failed: {exc}") from exc
+        q.mark_done(apply_id)
+        click.echo(f"✓ applied {kind} → new_id={new_id}")
+        return
+
+    # No flag → drain the queue ourselves (uses configured backend).
+    n = worker.drain(max_items=max_items)
+    click.echo(f"✓ processed {n} item(s)")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# evolver doctor
+# ─────────────────────────────────────────────────────────────────────
+
+
+@main.group()
+def evolver() -> None:
+    """Evolver backend admin."""
+
+
+@evolver.command(name="doctor")
+def evolver_doctor() -> None:
+    from .evolver.backends import available_backends, select_backend
+    from . import userconfig
+
+    click.echo("skillforge evolver doctor")
+    click.echo(f"  configured backend: {userconfig.get('evolver.backend', 'auto')}")
+    click.echo(f"  async in Stop hook: {userconfig.get('evolver.async_in_stop_hook', True)}")
+    click.echo("  backends:")
+    for name, ok in available_backends():
+        mark = "✓" if ok else "✗"
+        click.echo(f"    {mark} {name}")
+    selected = select_backend()
+    click.echo(f"  → would select: {selected.name}")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# _worker — invoked by Stop hook's detached spawn
+# ─────────────────────────────────────────────────────────────────────
+
+
+@main.command(name="_worker", hidden=True)
+@click.option("--task-id", help="Task that triggered this drain (informational only).")
+def worker_entry(task_id: str | None) -> None:
+    """Drain the queue. Intended for detached background execution."""
+    from .evolver import worker as _worker
+    n = _worker.drain()
+    click.echo(f"processed {n} item(s)" + (f" triggered by task {task_id}" if task_id else ""))
