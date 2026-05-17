@@ -644,6 +644,35 @@ def registry_build_index(registry_root: str, name: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────
+# dashboard / bridge   (Phase 5)
+# ─────────────────────────────────────────────────────────────────────
+
+
+@main.command()
+@click.option("--host", default="127.0.0.1")
+@click.option("--port", type=int, default=7777)
+@click.option("--no-open", is_flag=True, help="Don't auto-open browser.")
+def dash(host: str, port: int, no_open: bool) -> None:
+    """Open the local dashboard (skills, metrics, queue, records)."""
+    from .dashboard import run_dashboard
+    run_dashboard(host=host, port=port, open_browser=not no_open)
+
+
+@main.group()
+def bridge() -> None:
+    """Cross-host MCP bridge (Codex / OpenClaw / nanobot consumers)."""
+
+
+@bridge.command(name="serve")
+def bridge_serve() -> None:
+    """Run an MCP server on stdio. Configure your host agent's MCP file
+    to point at `sf bridge serve` to expose skillforge's search +
+    metrics + queue tools."""
+    from .bridge.mcp_server import serve_stdio
+    serve_stdio()
+
+
+# ─────────────────────────────────────────────────────────────────────
 # _worker — invoked by Stop hook's detached spawn
 # ─────────────────────────────────────────────────────────────────────
 
