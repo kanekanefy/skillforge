@@ -1,0 +1,312 @@
+"""skillforge CLI entry point.
+
+Subcommands:
+    sf install / uninstall  — hook registration in ~/.claude/settings.json
+    sf doctor               — check setup health
+    sf hook <event>         — invoked by Claude Code hooks (stdio JSON)
+    sf seed                 — load demo skills (Phase 1 dev aid)
+    sf db init              — create SQLite schema
+    sf list                 — list installed skills
+
+This is the surface that hooks and users both call. Keep it thin —
+real logic lives in submodules.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import click
+
+from . import __version__, config
+
+
+@click.group()
+@click.version_option(__version__)
+def main() -> None:
+    """skillforge — self-evolving skill runtime for Claude Code."""
+
+
+# ─────────────────────────────────────────────────────────────────────
+# install / uninstall
+# ─────────────────────────────────────────────────────────────────────
+
+
+HOOK_MARKER = "__skillforge__"
+"""Marker string we embed in hook command entries so we can dedup on reinstall
+and find our own hooks on uninstall without false positives."""
+
+
+def _settings_path(scope: str) -> Path:
+    if scope == "user":
+        return Path.home() / ".claude" / "settings.json"
+    if scope == "project":
+        return Path.cwd() / ".claude" / "settings.json"
+    raise click.BadParameter(f"unknown scope: {scope}")
+
+
+def _load_settings(path: Path) -> dict:
+    if path.exists():
+        return json.loads(path.read_text() or "{}")
+    return {}
+
+
+def _save_settings(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+# Events we hook into. Names match Claude Code's hook event names exactly.
+HOOK_EVENTS = [
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "Stop",
+    "SessionStart",
+]
+
+
+def _hook_entry(event: str) -> dict:
+    """Build one Claude-Code-shaped hook entry pointing at our CLI."""
+    return {
+        "hooks": [
+            {
+                "type": "command",
+                # Use the installed CLI rather than a python path so installations
+                # via pipx work cleanly. We add HOOK_MARKER as a comment-like arg
+                # the shell sees but our handler ignores.
+                "command": f"sf hook {event.lower()} {HOOK_MARKER}",
+            }
+        ]
+    }
+
+
+def _add_hooks(settings: dict) -> tuple[dict, list[str]]:
+    """Insert skillforge hooks into a settings dict.
+
+    Idempotent: if a hook already contains HOOK_MARKER for that event, skip.
+    Returns (new_dict, list_of_events_added).
+    """
+    settings = json.loads(json.dumps(settings))  # deep copy
+    hooks = settings.setdefault("hooks", {})
+    added: list[str] = []
+    for event in HOOK_EVENTS:
+        existing = hooks.setdefault(event, [])
+        already = any(
+            HOOK_MARKER in (h.get("command", "") or "")
+            for group in existing
+            for h in group.get("hooks", [])
+        )
+        if not already:
+            existing.append(_hook_entry(event))
+            added.append(event)
+    return settings, added
+
+
+def _remove_hooks(settings: dict) -> tuple[dict, list[str]]:
+    """Strip out skillforge-owned hook entries by HOOK_MARKER."""
+    settings = json.loads(json.dumps(settings))
+    hooks = settings.get("hooks", {})
+    removed: list[str] = []
+    for event in HOOK_EVENTS:
+        groups = hooks.get(event, [])
+        new_groups = []
+        for group in groups:
+            kept = [h for h in group.get("hooks", []) if HOOK_MARKER not in (h.get("command", "") or "")]
+            if kept:
+                new_groups.append({**group, "hooks": kept})
+        if len(new_groups) != len(groups):
+            removed.append(event)
+        if new_groups:
+            hooks[event] = new_groups
+        else:
+            hooks.pop(event, None)
+    if not hooks:
+        settings.pop("hooks", None)
+    return settings, removed
+
+
+@main.command()
+@click.option(
+    "--scope",
+    type=click.Choice(["user", "project"]),
+    default="project",
+    help="Where to register hooks. 'project' = ./.claude/settings.json, "
+         "'user' = ~/.claude/settings.json (affects all sessions).",
+)
+def install(scope: str) -> None:
+    """Register skillforge hooks into Claude Code's settings."""
+    config.ensure_layout()
+
+    path = _settings_path(scope)
+    backup = path.with_suffix(path.suffix + ".sf-backup")
+
+    current = _load_settings(path)
+    new, added = _add_hooks(current)
+
+    # Only back up if the on-disk file was pristine (no skillforge marker).
+    # Otherwise the "backup" would just snapshot our previous install.
+    raw = path.read_text() if path.exists() else ""
+    if path.exists() and HOOK_MARKER not in raw and not backup.exists():
+        backup.write_text(raw)
+        click.echo(f"  backed up pristine settings: {backup}")
+
+    _save_settings(path, new)
+
+    if added:
+        click.echo(f"✓ installed skillforge hooks at {path}")
+        click.echo(f"  events: {', '.join(added)}")
+    else:
+        click.echo(f"= skillforge hooks already present at {path}")
+
+    # First-install convenience: init the DB schema if missing.
+    from .store import db as _db
+    _db.init_schema()
+    click.echo(f"✓ database ready at {config.db_path()}")
+
+
+@main.command()
+@click.option("--scope", type=click.Choice(["user", "project"]), default="project")
+def uninstall(scope: str) -> None:
+    """Remove skillforge hooks from Claude Code's settings."""
+    path = _settings_path(scope)
+    if not path.exists():
+        click.echo(f"= no settings at {path}, nothing to do")
+        return
+
+    current = _load_settings(path)
+    new, removed = _remove_hooks(current)
+    _save_settings(path, new)
+
+    if removed:
+        click.echo(f"✓ removed skillforge hooks from {path}")
+        click.echo(f"  events: {', '.join(removed)}")
+    else:
+        click.echo(f"= no skillforge hooks found in {path}")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# doctor
+# ─────────────────────────────────────────────────────────────────────
+
+
+@main.command()
+def doctor() -> None:
+    """Diagnose the local install."""
+    click.echo(f"skillforge v{__version__}")
+    click.echo(f"  home:     {config.home()}")
+    click.echo(f"  db:       {config.db_path()} {'(exists)' if config.db_path().exists() else '(missing)'}")
+    click.echo(f"  skills:   {config.skills_dir()} ({len(list(config.skills_dir().glob('*'))) if config.skills_dir().exists() else 0} entries)")
+
+    # Hook registration check
+    for scope in ("user", "project"):
+        path = _settings_path(scope)
+        if not path.exists():
+            click.echo(f"  hooks ({scope}): {path} — no settings file")
+            continue
+        data = _load_settings(path)
+        events = [e for e in HOOK_EVENTS
+                  if any(HOOK_MARKER in (h.get("command", "") or "")
+                         for group in data.get("hooks", {}).get(e, [])
+                         for h in group.get("hooks", []))]
+        if events:
+            click.echo(f"  hooks ({scope}): {len(events)} registered — {', '.join(events)}")
+        else:
+            click.echo(f"  hooks ({scope}): not installed")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# hook dispatcher  (called by Claude Code)
+# ─────────────────────────────────────────────────────────────────────
+
+
+@main.command(name="hook")
+@click.argument("event")
+@click.argument("extra", nargs=-1)
+def hook_cmd(event: str, extra: tuple[str, ...]) -> None:
+    """Invoked by Claude Code hooks.
+
+    Reads a JSON event from stdin; writes either nothing (silent allow)
+    or a hookSpecificOutput JSON to stdout.
+    """
+    # Lazy import: hooks should start fast.
+    payload_text = sys.stdin.read()
+    try:
+        payload = json.loads(payload_text) if payload_text.strip() else {}
+    except json.JSONDecodeError:
+        # Bad input — don't break Claude Code; just be silent.
+        sys.exit(0)
+
+    event_key = event.lower().replace("-", "_")
+
+    if event_key == "userpromptsubmit":
+        from .hooks.pre_prompt import handle
+    elif event_key == "pretooluse":
+        from .hooks.pre_tool import handle  # type: ignore[no-redef]
+    elif event_key == "posttooluse":
+        from .hooks.post_tool import handle  # type: ignore[no-redef]
+    elif event_key == "stop":
+        from .hooks.stop import handle  # type: ignore[no-redef]
+    elif event_key == "sessionstart":
+        from .hooks.session_start import handle  # type: ignore[no-redef]
+    else:
+        sys.exit(0)
+
+    try:
+        out = handle(payload)
+    except Exception as exc:  # noqa: BLE001
+        # Never let a hook crash break the user's session.
+        # Log to stderr (goes to Claude Code's hook log) and exit clean.
+        print(f"skillforge hook {event} error: {exc}", file=sys.stderr)
+        sys.exit(0)
+
+    if out:
+        json.dump(out, sys.stdout, ensure_ascii=False)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# seed (dev aid)
+# ─────────────────────────────────────────────────────────────────────
+
+
+@main.command()
+def seed() -> None:
+    """Insert 3 dummy skills into the DB. For Phase 1 smoke testing only."""
+    from .store import db as _db
+    _db.init_schema()
+    _db.seed_dummies()
+    click.echo("✓ seeded 3 dummy skills")
+    for row in _db.list_skills():
+        click.echo(f"  - {row['skill_id']}: {row['name']} — {row['description']}")
+
+
+@main.command(name="list")
+def list_cmd() -> None:
+    """List all installed skills."""
+    from .store import db as _db
+    rows = _db.list_skills()
+    if not rows:
+        click.echo("(no skills)")
+        return
+    for r in rows:
+        click.echo(f"  {r['skill_id']}  {r['name']}  — {r['description']}")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# db (admin)
+# ─────────────────────────────────────────────────────────────────────
+
+
+@main.group()
+def db() -> None:
+    """Database admin."""
+
+
+@db.command(name="init")
+def db_init() -> None:
+    """Create SQLite schema (idempotent)."""
+    from .store import db as _db
+    _db.init_schema()
+    click.echo(f"✓ schema ready at {config.db_path()}")
