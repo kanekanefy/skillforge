@@ -1,0 +1,54 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/kane/Desktop/project/skillforge/.venv/bin/sf hook userpromptsubmit __skillforge__"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/kane/Desktop/project/skillforge/.venv/bin/sf hook pretooluse __skillforge__"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/kane/Desktop/project/skillforge/.venv/bin/sf hook posttooluse __skillforge__"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/kane/Desktop/project/skillforge/.venv/bin/sf hook stop __skillforge__"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/kane/Desktop/project/skillforge/.venv/bin/sf hook sessionstart __skillforge__"
+          }
+        ]
+      }
+    ]
+  }
+}

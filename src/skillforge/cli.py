@@ -15,6 +15,7 @@ real logic lives in submodules.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -68,22 +69,43 @@ HOOK_EVENTS = [
 ]
 
 
-def _hook_entry(event: str) -> dict:
-    """Build one Claude-Code-shaped hook entry pointing at our CLI."""
+def _sf_command() -> str:
+    """Return the command string Claude Code should invoke for hooks.
+
+    Preference order:
+      1. Absolute path to the currently-running `sf` (handles editable installs
+         in venvs that aren't on the user's shell PATH).
+      2. Fallback to `sf` (works post-`pipx install skillforge` since pipx
+         puts binaries on a stable PATH).
+
+    We pick (1) when sys.argv[0] looks like a real path on disk — that's the
+    case during `sf install`. This binds the hook to a specific binary, which
+    is what we want during dev; production pipx installs will hit (2) via
+    `sf install --bare-command`.
+    """
+    candidate = sys.argv[0]
+    if candidate and Path(candidate).exists() and "/" in candidate:
+        return str(Path(candidate).resolve())
+    found = shutil.which("sf")
+    return found or "sf"
+
+
+def _hook_entry(event: str, sf_cmd: str) -> dict:
+    """Build one Claude-Code-shaped hook entry pointing at our CLI.
+
+    HOOK_MARKER lets us identify our own hooks on reinstall / uninstall.
+    """
     return {
         "hooks": [
             {
                 "type": "command",
-                # Use the installed CLI rather than a python path so installations
-                # via pipx work cleanly. We add HOOK_MARKER as a comment-like arg
-                # the shell sees but our handler ignores.
-                "command": f"sf hook {event.lower()} {HOOK_MARKER}",
+                "command": f"{sf_cmd} hook {event.lower()} {HOOK_MARKER}",
             }
         ]
     }
 
 
-def _add_hooks(settings: dict) -> tuple[dict, list[str]]:
+def _add_hooks(settings: dict, sf_cmd: str) -> tuple[dict, list[str]]:
     """Insert skillforge hooks into a settings dict.
 
     Idempotent: if a hook already contains HOOK_MARKER for that event, skip.
@@ -100,7 +122,7 @@ def _add_hooks(settings: dict) -> tuple[dict, list[str]]:
             for h in group.get("hooks", [])
         )
         if not already:
-            existing.append(_hook_entry(event))
+            existing.append(_hook_entry(event, sf_cmd))
             added.append(event)
     return settings, added
 
@@ -136,15 +158,24 @@ def _remove_hooks(settings: dict) -> tuple[dict, list[str]]:
     help="Where to register hooks. 'project' = ./.claude/settings.json, "
          "'user' = ~/.claude/settings.json (affects all sessions).",
 )
-def install(scope: str) -> None:
+@click.option(
+    "--bare-command",
+    is_flag=True,
+    help="Write `sf` literally instead of the absolute path. Use this when "
+         "you installed skillforge via pipx and want hooks to follow PATH "
+         "rather than binding to today's binary location.",
+)
+def install(scope: str, bare_command: bool) -> None:
     """Register skillforge hooks into Claude Code's settings."""
     config.ensure_layout()
 
     path = _settings_path(scope)
     backup = path.with_suffix(path.suffix + ".sf-backup")
 
+    sf_cmd = "sf" if bare_command else _sf_command()
+
     current = _load_settings(path)
-    new, added = _add_hooks(current)
+    new, added = _add_hooks(current, sf_cmd)
 
     # Only back up if the on-disk file was pristine (no skillforge marker).
     # Otherwise the "backup" would just snapshot our previous install.
@@ -157,7 +188,8 @@ def install(scope: str) -> None:
 
     if added:
         click.echo(f"✓ installed skillforge hooks at {path}")
-        click.echo(f"  events: {', '.join(added)}")
+        click.echo(f"  events:  {', '.join(added)}")
+        click.echo(f"  command: {sf_cmd}")
     else:
         click.echo(f"= skillforge hooks already present at {path}")
 
