@@ -536,6 +536,114 @@ def evolver_doctor() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────
+# search / install / publish / registry  (Phase 4)
+# ─────────────────────────────────────────────────────────────────────
+
+
+@main.command()
+@click.argument("query")
+@click.option("--remote", is_flag=True, help="Search the registry instead of local.")
+@click.option("--limit", type=int, default=10)
+def search(query: str, remote: bool, limit: int) -> None:
+    """Search local skills (FTS5 BM25) or the active registry."""
+    if remote:
+        from .cloud import fetch_index, registry_url
+        try:
+            entries = fetch_index()
+        except Exception as exc:
+            raise click.ClickException(f"fetch failed: {exc}")
+        click.echo(f"# registry: {registry_url()}")
+        q = query.lower()
+        hits = [e for e in entries
+                if q in e.name.lower() or q in e.description.lower()
+                or any(q in t.lower() for t in (e.tags or []))]
+        for e in hits[:limit]:
+            click.echo(f"  {e.skill_id}  {e.name}  [{e.category}]  — {e.description}")
+        if not hits:
+            click.echo("(no remote matches)")
+    else:
+        from .store import db as _db
+        rows = _db.search(query, limit=limit)
+        if not rows:
+            click.echo("(no local matches)")
+        for r in rows:
+            click.echo(f"  {r['skill_id']}  {r['name']}  — {r['description']}")
+
+
+@main.command(name="install-skill")
+@click.argument("skill_id")
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
+@click.option("--no-verify", is_flag=True, help="Skip checksum verification.")
+def install_skill_cmd(skill_id: str, yes: bool, no_verify: bool) -> None:
+    """Install a skill from the active registry by skill_id (or name)."""
+    from .cloud import fetch_index, install_skill
+
+    try:
+        entries = fetch_index()
+    except Exception as exc:
+        raise click.ClickException(f"fetch failed: {exc}")
+
+    match = next((e for e in entries
+                  if e.skill_id == skill_id or e.name == skill_id), None)
+    if not match:
+        raise click.ClickException(f"not found in registry: {skill_id}")
+
+    click.echo(f"Skill:       {match.name} ({match.skill_id})")
+    click.echo(f"Category:    {match.category}")
+    click.echo(f"Description: {match.description}")
+    click.echo(f"Maintainer:  {match.maintainer or '(unspecified)'}")
+    click.echo(f"License:     {match.license or '(unspecified)'}")
+    click.echo(f"Checksum:    {match.checksum}")
+    if not yes and not click.confirm("Install?", default=True):
+        click.echo("aborted")
+        return
+
+    path = install_skill(match, verify_checksum=not no_verify)
+    click.echo(f"✓ installed → {path}")
+
+
+@main.command()
+@click.argument("skill_id")
+def publish(skill_id: str) -> None:
+    """Print step-by-step instructions for PRing a skill to the registry."""
+    from .cloud.github_sync import publish_instructions
+    click.echo(publish_instructions(skill_id))
+
+
+@main.group()
+def registry() -> None:
+    """Manage which registry sf search/install pulls from."""
+
+
+@registry.command(name="get")
+def registry_get() -> None:
+    from .cloud import registry_url
+    click.echo(registry_url())
+
+
+@registry.command(name="set")
+@click.argument("url")
+def registry_set(url: str) -> None:
+    from . import userconfig
+    userconfig.set_("registry.url", url)
+    click.echo(f"✓ registry.url = {url}")
+
+
+@registry.command(name="build-index")
+@click.argument("registry_root", type=click.Path(exists=True, file_okay=False))
+@click.option("--name", default="local", help="Registry display name in index.")
+def registry_build_index(registry_root: str, name: str) -> None:
+    """For maintainers of a registry fork: regenerate index.json."""
+    import json as _json
+    from .cloud.manifest import build_index
+    idx = build_index(Path(registry_root), registry_name=name)
+    out_path = Path(registry_root) / "index.json"
+    out_path.write_text(_json.dumps(idx, indent=2, ensure_ascii=False) + "\n",
+                        encoding="utf-8")
+    click.echo(f"✓ wrote {out_path} ({len(idx['skills'])} skills)")
+
+
+# ─────────────────────────────────────────────────────────────────────
 # _worker — invoked by Stop hook's detached spawn
 # ─────────────────────────────────────────────────────────────────────
 
