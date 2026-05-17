@@ -226,17 +226,40 @@ def uninstall(scope: str) -> None:
 
 @main.command()
 def doctor() -> None:
-    """Diagnose the local install."""
-    click.echo(f"skillforge v{__version__}")
-    click.echo(f"  home:     {config.home()}")
-    click.echo(f"  db:       {config.db_path()} {'(exists)' if config.db_path().exists() else '(missing)'}")
-    click.echo(f"  skills:   {config.skills_dir()} ({len(list(config.skills_dir().glob('*'))) if config.skills_dir().exists() else 0} entries)")
+    """Comprehensive health check.
 
-    # Hook registration check
+    Sections:
+        1. Installation state (paths, version)
+        2. Hook registration (user + project scope)
+        3. Database integrity
+        4. Evolver backend availability
+        5. Registry connectivity (best-effort)
+        6. Pending evolution work
+    """
+    import shutil as _shutil
+    from .store import db as _db
+    from .evolver.backends import available_backends, select_backend
+    from .evolver import queue as _queue
+    from . import userconfig
+
+    click.echo(f"skillforge v{__version__}")
+    click.echo()
+
+    # ── 1. paths ─────────────────────────────────────────────────────
+    click.echo("Paths")
+    click.echo(f"  home:     {config.home()}")
+    click.echo(f"  db:       {config.db_path()} {'(exists)' if config.db_path().exists() else '(MISSING — run `sf db init`)'}")
+    click.echo(f"  skills:   {config.skills_dir()} ({len(list(config.skills_dir().glob('*'))) if config.skills_dir().exists() else 0} entries)")
+    click.echo(f"  config:   {config.config_path()} {'(exists)' if config.config_path().exists() else '(using defaults)'}")
+    click.echo()
+
+    # ── 2. hooks ─────────────────────────────────────────────────────
+    click.echo("Claude Code hooks")
+    any_registered = False
     for scope in ("user", "project"):
         path = _settings_path(scope)
         if not path.exists():
-            click.echo(f"  hooks ({scope}): {path} — no settings file")
+            click.echo(f"  {scope:8}: {path} — no settings file")
             continue
         data = _load_settings(path)
         events = [e for e in HOOK_EVENTS
@@ -244,9 +267,58 @@ def doctor() -> None:
                          for group in data.get("hooks", {}).get(e, [])
                          for h in group.get("hooks", []))]
         if events:
-            click.echo(f"  hooks ({scope}): {len(events)} registered — {', '.join(events)}")
+            any_registered = True
+            click.echo(f"  {scope:8}: ✓ {len(events)}/{len(HOOK_EVENTS)} hooks → {path}")
         else:
-            click.echo(f"  hooks ({scope}): not installed")
+            click.echo(f"  {scope:8}: ✗ no skillforge hooks in {path}")
+    if not any_registered:
+        click.echo("  → run `sf install` to register hooks")
+    click.echo()
+
+    # ── 3. database ──────────────────────────────────────────────────
+    click.echo("Database")
+    if not config.db_path().exists():
+        click.echo("  ✗ db missing")
+    else:
+        try:
+            with _db.connect() as conn:
+                n_skills = conn.execute("SELECT COUNT(*) AS n FROM skills WHERE is_active=1").fetchone()["n"]
+                n_metrics = conn.execute("SELECT COUNT(*) AS n FROM skill_metrics").fetchone()["n"]
+                n_lineage = conn.execute("SELECT COUNT(*) AS n FROM skill_lineage").fetchone()["n"]
+            click.echo(f"  ✓ skills:  {n_skills} active")
+            click.echo(f"  ✓ metrics: {n_metrics} rows")
+            click.echo(f"  ✓ lineage: {n_lineage} edges")
+        except Exception as exc:  # noqa: BLE001
+            click.echo(f"  ✗ db error: {exc}")
+    click.echo()
+
+    # ── 4. backends ──────────────────────────────────────────────────
+    click.echo("Evolver backends")
+    click.echo(f"  configured: {userconfig.get('evolver.backend', 'auto')}")
+    for name, ok in available_backends():
+        mark = "✓" if ok else "✗"
+        path = _shutil.which(name) if name in ("codex", "claude-p") else None
+        suffix = f"  ({path})" if path else ""
+        click.echo(f"  {mark} {name}{suffix}")
+    sel = select_backend()
+    click.echo(f"  → active: {sel.name}")
+    click.echo()
+
+    # ── 5. registry ──────────────────────────────────────────────────
+    click.echo("Registry")
+    from .cloud import registry_url
+    click.echo(f"  url:    {registry_url()}")
+    cache = config.home() / "registry-cache" / "index.json"
+    click.echo(f"  cache:  {'present' if cache.exists() else 'empty (no previous fetch)'}")
+    click.echo()
+
+    # ── 6. queue ─────────────────────────────────────────────────────
+    click.echo("Evolution queue")
+    try:
+        n = _queue.count_pending()
+        click.echo(f"  pending: {n}{' (run `sf evolve` to drain)' if n else ''}")
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"  ? queue inaccessible: {exc}")
 
 
 # ─────────────────────────────────────────────────────────────────────
