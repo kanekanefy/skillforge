@@ -32,6 +32,9 @@ def build_vision_prompt(*, image_path: str | Path, question: str,
       3. End with `<sf-vision>{json}</sf-vision>` so the parent can parse.
     """
     p = Path(image_path).expanduser().resolve()
+    # Build the context block separately — Python 3.11 doesn't allow
+    # backslash-containing expressions inside f-strings (PEP 701 only).
+    context_block = f"# Additional context\n{context_hint}\n\n" if context_hint else ""
     return f"""\
 You are a vision-analysis subagent for skillforge.
 
@@ -44,9 +47,7 @@ visually as part of your context.)
 # Question
 {question}
 
-{f"# Additional context\\n{context_hint}\\n" if context_hint else ""}
-
-# Output format
+{context_block}# Output format
 After reasoning, end your response with EXACTLY one line of the form:
 
     <sf-vision>{{"answer": "<concise text>", "confidence": "high|medium|low", "key_evidence": "<one short phrase>"}}</sf-vision>
