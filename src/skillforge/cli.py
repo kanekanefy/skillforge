@@ -327,6 +327,50 @@ def list_cmd() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────
+# metrics
+# ─────────────────────────────────────────────────────────────────────
+
+
+@main.group()
+def metrics() -> None:
+    """Skill quality metrics."""
+
+
+@metrics.command(name="show")
+def metrics_show() -> None:
+    """Print per-skill counters and derived rates."""
+    from .store import db as _db
+    rows = _db.all_metrics()
+    if not rows:
+        click.echo("(no metrics recorded yet)")
+        return
+    # Compact tabular output
+    headers = ["name", "select", "applied", "effective", "fallback",
+               "comp/cont", "rates(a/e/f)"]
+    click.echo("  ".join(f"{h:<13}" for h in headers))
+    for r in rows:
+        total = r["total_selections"]
+        applied = r["applied"]
+        eff = r["effective"]
+        fb = r["fallback"]
+        comp = r["completed_tasks"]
+        cont = r["containing_tasks"]
+        ar = applied / total if total else 0
+        er = eff / applied if applied else 0
+        fr = fb / total if total else 0
+        cells = [
+            r["name"][:13],
+            str(total),
+            str(applied),
+            str(eff),
+            str(fb),
+            f"{comp}/{cont}",
+            f"{ar:.2f}/{er:.2f}/{fr:.2f}",
+        ]
+        click.echo("  ".join(f"{c:<13}" for c in cells))
+
+
+# ─────────────────────────────────────────────────────────────────────
 # db (admin)
 # ─────────────────────────────────────────────────────────────────────
 

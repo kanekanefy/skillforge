@@ -136,6 +136,69 @@ def insert_skill(*, skill_id: str, name: str, description: str,
         )
 
 
+def bump_metrics(skill_id: str, **deltas: int) -> None:
+    """Increment one or more counter columns in skill_metrics atomically.
+
+    Creates the row if it doesn't exist (UPSERT). All deltas must be ints.
+
+    Valid column names: total_selections, applied, effective, fallback,
+    completed_tasks, containing_tasks.
+    """
+    valid = {"total_selections", "applied", "effective", "fallback",
+             "completed_tasks", "containing_tasks"}
+    if not skill_id or not deltas:
+        return
+    bad = set(deltas) - valid
+    if bad:
+        raise ValueError(f"unknown metric columns: {bad}")
+
+    # Build a single UPSERT that increments each named column.
+    # SQLite ON CONFLICT lets us do create-or-increment in one statement.
+    cols = list(deltas)
+    set_clause = ", ".join(f"{c} = {c} + ?" for c in cols)
+    insert_cols = "skill_id, last_used_at, " + ", ".join(cols)
+    insert_vals = "?, datetime('now'), " + ", ".join(["?"] * len(cols))
+    values = [deltas[c] for c in cols]
+
+    sql = f"""
+        INSERT INTO skill_metrics ({insert_cols})
+        VALUES ({insert_vals})
+        ON CONFLICT(skill_id) DO UPDATE SET
+            {set_clause},
+            last_used_at = datetime('now')
+    """
+    # Bind values twice: once for INSERT, once for SET.
+    with connect() as conn:
+        conn.execute(sql, [skill_id] + values + values)
+
+
+def get_metrics(skill_id: str) -> dict | None:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM skill_metrics WHERE skill_id = ?", (skill_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def all_metrics() -> list[dict]:
+    """Return metrics joined with skill name for display."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT m.*, s.name FROM skill_metrics m "
+            "JOIN skills s ON s.skill_id = m.skill_id "
+            "ORDER BY m.last_used_at DESC NULLS LAST"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def find_skill_by_name(name: str) -> sqlite3.Row | None:
+    with connect() as conn:
+        return conn.execute(
+            "SELECT skill_id, name FROM skills WHERE name = ? AND is_active = 1",
+            (name,)
+        ).fetchone()
+
+
 def seed_dummies() -> None:
     """Three demo skills for Phase 1 smoke testing.
 
