@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-SKILLFORGE_REPO="${SKILLFORGE_REPO:-skillforge/skillforge}"   # github org/repo
+SKILLFORGE_REPO="${SKILLFORGE_REPO:-kanekanefy/skillforge}"   # github org/repo
 SKILLFORGE_BRANCH="${SKILLFORGE_BRANCH:-main}"
 
 # ── coloring ────────────────────────────────────────────────────────

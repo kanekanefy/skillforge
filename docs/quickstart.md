@@ -3,13 +3,13 @@
 ## 1. Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/skillforge/skillforge/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/kanekanefy/skillforge/main/install.sh | bash
 ```
 
 Or, from a clone:
 
 ```bash
-git clone https://github.com/skillforge/skillforge
+git clone https://github.com/kanekanefy/skillforge
 cd skillforge
 ./install.sh
 ```

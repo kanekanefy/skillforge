@@ -41,7 +41,7 @@ Three pluggable evolver backends, picked based on what you already have:
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/skillforge/skillforge/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/kanekanefy/skillforge/main/install.sh | bash
 sf doctor
 ```
 
