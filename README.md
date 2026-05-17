@@ -1,6 +1,26 @@
-# skillforge
+<div align="center">
 
-> A self-evolving skill runtime for Claude Code — search before you generate, learn from every task, evolve in real time.
+# 🔥 skillforge
+
+**A self-evolving skill runtime for Claude Code — search before you generate, learn from every task, evolve in real time.**
+
+[![CI](https://github.com/kanekanefy/skillforge/actions/workflows/ci.yml/badge.svg)](https://github.com/kanekanefy/skillforge/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/kanekanefy/skillforge?display_name=tag&sort=semver&color=blue)](https://github.com/kanekanefy/skillforge/releases/latest)
+[![License](https://img.shields.io/github/license/kanekanefy/skillforge?color=lightgrey)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](pyproject.toml)
+[![Tests](https://img.shields.io/badge/tests-56%2F56_passing-brightgreen)](https://github.com/kanekanefy/skillforge/actions)
+[![Code size](https://img.shields.io/github/languages/code-size/kanekanefy/skillforge?color=informational)](https://github.com/kanekanefy/skillforge)
+
+[![Claude Code](https://img.shields.io/badge/built_for-Claude_Code-d97757?logo=anthropic&logoColor=white)](https://claude.com/claude-code)
+[![Agent Skills](https://img.shields.io/badge/Agent_Skills-spec_compatible-6f1ec7)](https://github.com/anthropics/skills)
+[![Self-evolving](https://img.shields.io/badge/skills-self--evolving-ff69b4)](docs/evolution.md)
+[![No API key](https://img.shields.io/badge/no_API_key-needed-success)](docs/evolver-backends.md)
+
+[Quickstart](docs/quickstart.md) · [Architecture](docs/architecture.md) · [Evolution](docs/evolution.md) · [Evolver backends](docs/evolver-backends.md)
+
+</div>
+
+---
 
 skillforge is a Claude-Code-native rewrite of the ideas in [HKUDS/OpenSpace](https://github.com/HKUDS/OpenSpace): a *skill operating system* that watches what your agent does, ranks reusable patterns, and improves them automatically. Unlike OpenSpace, **all inference runs through your existing subscriptions** — no separate API key needed.
 
@@ -89,6 +109,25 @@ sf bridge serve                       MCP server for other hosts
 sf db init                            (re)create SQLite schema
 sf seed                               load 3 demo skills (testing)
 ```
+
+## Where do skills come from?
+
+You don't need to build your own library. **Anthropic released the Agent Skills spec as an open standard in Dec 2025**, and the ecosystem already has thousands of skills you can drop in:
+
+| Source | What it is | How to use with skillforge |
+|---|---|---|
+| [anthropics/skills](https://github.com/anthropics/skills) | Anthropic's official skills repo | Clone individual `SKILL.md`s into `~/.skillforge/skills/<id>/` |
+| [anthropics/claude-plugins-official](https://github.com/anthropics/claude-plugins-official) | Anthropic-curated marketplace (~55 plugins) | Install via Claude Code's native `/plugin install`; skillforge will index whatever lands in `~/.claude/skills/` |
+| [wshobson/agents](https://github.com/wshobson/agents) | Community marketplace (~72 plugins) | Same |
+| [claudemarketplaces.com](https://claudemarketplaces.com/) | Discovery site (4200+ skills, 2500+ marketplaces) | Browse, install via Claude Code |
+| [claudeskills.info](https://claudeskills.info/) | Skill-only marketplace | Browse, copy SKILL.md |
+| [claude-plugins.dev](https://claude-plugins.dev/) | Community registry + CLI | Install plugins, skillforge tracks metrics on top |
+
+**The Agent Skills spec is also adopted by OpenAI's Codex CLI** ([SkillsMP](https://skillsmp.com/) is cross-host), so skills you accumulate here are portable.
+
+skillforge's role isn't to replace these registries — it's the **layer above them** that adds metrics + auto-evolution + cross-host bridging. Use whichever marketplace has the skills you want; skillforge tracks how they perform and improves them over time.
+
+> ℹ️ Currently `sf install-skill` only knows skillforge's own registry format. To bring in skills from the marketplaces above, copy their `SKILL.md` into `~/.skillforge/skills/<some-id>/` and run `sf db init`. A `sf import` command for marketplace formats is on the v0.2 list.
 
 ## What's different from a normal Claude Code skill?
 
